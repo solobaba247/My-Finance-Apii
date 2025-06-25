@@ -1,0 +1,5 @@
+Flask
+yfinance
+Flask-Cors
+pandas
+gunicorn 
