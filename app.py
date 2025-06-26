@@ -29,39 +29,43 @@ def get_market_data():
     if not symbol:
         return jsonify({"Error Message": "Stock symbol parameter is required."}), 400
 
-    # Convert our interval name to the yfinance format
     yf_interval = YFINANCE_INTERVALS.get(interval_key)
     if not yf_interval:
         return jsonify({"Error Message": f"Invalid interval: {interval_key}"}), 400
         
-    # For Forex, yfinance uses a specific format like "EURUSD=X"
     if asset_type == 'FOREX':
         symbol = f"{symbol.replace('/', '')}=X"
 
     try:
-        # Fetch data using yfinance
-        # Use a sensible period for each interval to avoid massive downloads
         period = "1y" # 1 year for daily
+        # For intraday, yfinance can only provide up to 60 days of history
         if yf_interval != '1d':
-            period = "7d" # 7 days for intraday to get enough data
+            period = "60d" 
 
         data = yf.download(tickers=symbol, period=period, interval=yf_interval)
 
         if data.empty:
             return jsonify({"Error Message": f"No data found for symbol {symbol} with interval {yf_interval}. It might be a delisted ticker or an invalid interval for this period."}), 404
 
-        # The rest of the JS code expects data in a specific format,
-        # similar to Alpha Vantage. We must replicate that format.
+        # ======================================================================== #
+        # === FIX IS HERE: Robustly handle timezone-naive and timezone-aware data === #
+        # ======================================================================== #
+        # The goal is to ensure all timestamps are in UTC before we process them.
+        
+        if data.index.tz is None:
+            # If the index is "naive" (no timezone), we must first 'localize' it.
+            # We assume UTC as the standard timezone for naive timestamps.
+            data = data.tz_localize('UTC')
+        else:
+            # If it's already "aware" (has a timezone), just convert it to UTC.
+            data = data.tz_convert('UTC')
+        
+        # Now, data.index is guaranteed to be timezone-aware and in UTC.
+
         time_series_key = f"Time Series ({interval_key})"
         
-        # yfinance gives timezone-aware timestamps. We convert to UTC and format.
-        data.index = data.index.tz_convert('UTC')
-
-        # Format the data into the JSON structure our frontend expects
         formatted_data = {}
         for timestamp, row in data.iterrows():
-            # Format the timestamp to match what the old API gave
-            # e.g., '2023-10-27 15:55:00'
             date_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
             formatted_data[date_str] = {
                 "1. open": str(row['Open']),
@@ -71,7 +75,6 @@ def get_market_data():
                 "5. volume": str(row['Volume'])
             }
             
-        # The final structure must match the old API response
         response_json = {
             time_series_key: formatted_data,
             "Meta Data": {
@@ -83,9 +86,7 @@ def get_market_data():
         return jsonify(response_json)
 
     except Exception as e:
-        # Catch any other errors from yfinance or processing
         return jsonify({"Error Message": f"An error occurred: {str(e)}"}), 500
 
-# This allows you to run the server directly for testing
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
